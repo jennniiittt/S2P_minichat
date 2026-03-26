@@ -1,4 +1,139 @@
-package server
+package client
+
+import (
+    "bufio"
+    "encoding/binary"
+    "fmt"
+    "log"
+    "net"
+    "os"
+    "strings"
+
+    "s2p_minichat/crypto"
+)
+
+func StartClient() {
+    reader := bufio.NewReader(os.Stdin)
+    fmt.Print("Server IP (Tailscale IP works): ")
+    serverIP, _ := reader.ReadString('\n')
+    serverIP = strings.TrimSpace(serverIP)
+
+    conn, err := net.Dial("tcp", serverIP+":9000")
+    if err != nil {
+        log.Fatal(err)
+    }
+    fmt.Println("Connected to server!")
+
+    // KEY EXCHANGE PART
+    pub, priv, _ := crypto.GenerateKeyPair()
+    var serverPub [32]byte
+    _, _ = conn.Read(serverPub[:])
+    conn.Write(pub[:])
+    shared, _ := crypto.ComputeSharedSecret(priv, serverPub)
+
+    // AUTHENTICATION LOOP
+    const maxAttempts = 3
+    authenticated := false
+
+    for i := 0; i < maxAttempts && !authenticated; i++ {
+        fmt.Print("Choose SIGNUP or LOGIN: ")
+        action, _ := reader.ReadString('\n')
+        action = strings.TrimSpace(strings.ToLower(action))
+
+        fmt.Print("Username: ")
+        username, _ := reader.ReadString('\n')
+        username = strings.TrimSpace(username)
+
+        fmt.Print("Password: ")
+        password, _ := reader.ReadString('\n')
+        password = strings.TrimSpace(password)
+
+        // Send encrypted payload to server
+        payload := fmt.Sprintf("%s|%s|%s", action, username, password)
+        encPayload, _ := crypto.Encrypt(shared, []byte(payload))
+        sendMessage(conn, encPayload)
+
+        resp, _ := readMessage(conn)
+        decResp, _ := crypto.Decrypt(shared, resp)
+        message := string(decResp)
+        fmt.Println("Server response:", message)
+
+        // Check response
+        if strings.HasPrefix(message, "Authentication successful") {
+            authenticated = true
+        } else {
+            attemptsLeft := maxAttempts - i - 1
+            if attemptsLeft > 0 {
+                fmt.Printf("Login failed. Attempts left: %d\n", attemptsLeft)
+            } else {
+                fmt.Println("Too many failed attempts. Exiting...")
+                return
+            }
+        }
+    }
+
+    // Start chat loops after successful authentication
+    go receiveLoop(conn, shared)
+    sendLoop(conn, shared)
+}
+
+// --- Helper functions ---
+func readMessage(conn net.Conn) ([]byte, error) {
+    lenBuf := make([]byte, 4)
+    _, err := conn.Read(lenBuf)
+    if err != nil {
+        return nil, err
+    }
+    msgLen := binary.BigEndian.Uint32(lenBuf)
+    msg := make([]byte, msgLen)
+    _, err = conn.Read(msg)
+    return msg, err
+}
+
+func sendMessage(conn net.Conn, data []byte) error {
+    lenBuf := make([]byte, 4)
+    binary.BigEndian.PutUint32(lenBuf, uint32(len(data)))
+    _, err := conn.Write(lenBuf)
+    if err != nil {
+        return err
+    }
+    _, err = conn.Write(data)
+    return err
+}
+
+func receiveLoop(conn net.Conn, key []byte) {
+    for {
+        msg, err := readMessage(conn)
+        if err != nil {
+            fmt.Println("Server disconnected.")
+            os.Exit(0)
+        }
+        dec, _ := crypto.Decrypt(key, msg)
+        fmt.Println("\nServer:", string(dec))
+        fmt.Print("You: ")
+    }
+}
+
+func sendLoop(conn net.Conn, key []byte) {
+    scanner := bufio.NewScanner(os.Stdin)
+    for {
+        fmt.Print("You: ")
+        scanner.Scan()
+        text := scanner.Text()
+        if text == "exit" {
+            conn.Close()
+            os.Exit(0)
+        }
+        enc, _ := crypto.Encrypt(key, []byte(text))
+        sendMessage(conn, enc)
+    }
+}
+
+
+
+
+
+/*package server
 
 import (
     "bufio"
@@ -104,60 +239,6 @@ func StartServer() {
 
 
 
-/*
-
-func authenticateClient(conn net.Conn, key []byte) bool {
-    encMsg, _ := ServerReadMessage(conn)
-    msg, _ := crypto.Decrypt(key, encMsg)
-    input := string(msg)
-
-    parts := []string{}
-    for _, v := range input {
-        if v == '|' {
-            parts = append(parts, "")
-        } else {
-            if len(parts) == 0 {
-                parts = append(parts, "")
-            }
-            parts[len(parts)-1] += string(v)
-        }
-    }
-
-    if len(parts) < 3 {
-        ServerSendMessage(conn, mustEncrypt(key, []byte("FAIL|Invalid input")))
-        return false
-    }
-
-    action, username, password := parts[0], parts[1], parts[2]
-
-    switch action {
-    case "SIGNUP":
-        if _, ok := users[username]; ok {
-            ServerSendMessage(conn, mustEncrypt(key, []byte("FAIL|Username exists")))
-            return false
-        }
-        hash, _ := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
-        users[username] = string(hash)
-        saveUsers()
-        ServerSendMessage(conn, mustEncrypt(key, []byte("SUCCESS|Signed up")))
-        return true
-    case "LOGIN":
-        hash, ok := users[username]
-        if !ok || bcrypt.CompareHashAndPassword([]byte(hash), []byte(password)) != nil {
-            ServerSendMessage(conn, mustEncrypt(key, []byte("FAIL|Wrong credentials")))
-            return false
-        }
-        ServerSendMessage(conn, mustEncrypt(key, []byte("SUCCESS|Logged in")))
-        return true
-    default:
-        ServerSendMessage(conn, mustEncrypt(key, []byte("FAIL|Unknown action")))
-        return false
-    }
-}
-*/
-
-
-
 // Utility for encryption
 func mustEncrypt(key, msg []byte) []byte {
     enc, _ := crypto.Encrypt(key, msg)
@@ -214,3 +295,13 @@ func serverSend(conn net.Conn, key []byte) {
         ServerSendMessage(conn, enc)
     }
 }
+
+*/
+
+
+
+
+
+
+
+
