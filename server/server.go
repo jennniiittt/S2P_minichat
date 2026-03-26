@@ -12,7 +12,6 @@ import (
     "s2p_minichat/auth"
     "s2p_minichat/crypto"
 )
-
 func StartServer() {
     ln, err := net.Listen("tcp", ":9000")
     if err != nil {
@@ -27,31 +26,61 @@ func StartServer() {
     fmt.Println("Client connected!")
 
     // AUTHENTICATION PART
-    maxAttempts := 3
-    success := false
+    const maxAttempts = 3
+    authenticated := false
 
-    for i := 0; i < maxAttempts; i++ {
-        if handleAuth(conn) {
-            success = true
-            break
-        } else {
-            attemptsLeft := maxAttempts - i - 1
-            msg := fmt.Sprintf("Auth failed. Attempts left: %d\n", attemptsLeft)
-            conn.Write([]byte(msg))
+    for i := 0; i < maxAttempts && !authenticated; i++ {
+        conn.Write([]byte("Type 'signup' or 'login': "))
+        authTypeBuf := make([]byte, 1024)
+        n, _ := conn.Read(authTypeBuf)
+        authType := strings.TrimSpace(string(authTypeBuf[:n]))
+
+        conn.Write([]byte("Username: "))
+        userBuf := make([]byte, 1024)
+        n, _ = conn.Read(userBuf)
+        username := strings.TrimSpace(string(userBuf[:n]))
+
+        conn.Write([]byte("Password: "))
+        passBuf := make([]byte, 1024)
+        n, _ = conn.Read(passBuf)
+        password := strings.TrimSpace(string(passBuf[:n]))
+
+        path := "users.json"
+
+        switch authType {
+        case "signup":
+            err := auth.Signup(path, username, password)
+            if err != nil {
+                conn.Write([]byte("Signup failed: " + err.Error() + "\n"))
+            } else {
+                conn.Write([]byte("Signup successful! Now login.\n"))
+            }
+            // i is not incremented here because signup doesn't count as a failed login
+            i--
+        case "login":
+            err := auth.Authenticate(path, username, password)
+            if err != nil {
+                attemptsLeft := maxAttempts - i - 1
+                msg := fmt.Sprintf("Login failed. Attempts left: %d\n", attemptsLeft)
+                conn.Write([]byte(msg))
+            } else {
+                conn.Write([]byte("Authentication successful!\n"))
+                authenticated = true
+            }
+        default:
+            conn.Write([]byte("Invalid option, try again.\n"))
+            i-- // invalid choice doesn't count as attempt
         }
     }
 
-    if !success {
+    if !authenticated {
         conn.Write([]byte("Too many failed attempts. Connection closed.\n"))
         conn.Close()
         return
     }
 
-    conn.Write([]byte("Authentication successful!\n"))
-
-    // KEY EXCHANGE
+    // KEY EXCHANGE PART
     pub, priv, _ := crypto.GenerateKeyPair()
-
     conn.Write(pub[:])
 
     var clientPub [32]byte
@@ -70,51 +99,6 @@ func StartServer() {
     go serverReceive(conn, shared)
     serverSend(conn, shared)
 }
-
-// THIS MUST BE OUTSIDE StartServer
-func handleAuth(conn net.Conn) bool {
-    buffer := make([]byte, 1024)
-
-    conn.Write([]byte("Type 'login' or 'signup': "))
-    n, _ := conn.Read(buffer)
-    choice := string(buffer[:n])
-
-    conn.Write([]byte("Username: "))
-    n, _ = conn.Read(buffer)
-    username := string(buffer[:n])
-
-    conn.Write([]byte("Password: "))
-    n, _ = conn.Read(buffer)
-    password := string(buffer[:n])
-
-    username = strings.TrimSpace(username)
-    password = strings.TrimSpace(password)
-    choice = strings.TrimSpace(choice)
-
-    path := "users.json"
-
-    if choice == "signup" {
-        err := auth.Signup(path, username, password)
-        if err != nil {
-            conn.Write([]byte("Signup failed: " + err.Error() + "\n"))
-            return false
-        }
-        conn.Write([]byte("Signup successful! Please login.\n"))
-        return false
-    }
-
-    if choice == "login" {
-        err := auth.Authenticate(path, username, password)
-        if err != nil {
-            return false
-        }
-        return true
-    }
-
-    conn.Write([]byte("Invalid option\n"))
-    return false
-}
-
 
 
 
